@@ -12,7 +12,7 @@ version="${version}"
 displayName="JourneyMap WebMap"
 updateJSONURL="https://forge.curseupdate.com/793035/journeymap-web-map"
 displayURL="http://journeymap.info"
-logoFile="journeymapwebmap.png"
+iconFile="journeymapwebmap.png"
 credits="Techbrew, Mysticdrew, gdude"
 authors="Techbrew, Mysticdrew"
 
@@ -23,17 +23,17 @@ Client WebMap for Journeymap. Built: ${date}.
 [[dependencies.journeymap_webmap]]
 modId = "neoforge"
 type = "required"
-versionRange = "[26.2.0.0-beta,)"
+versionRange = "[26.3.0.0-beta,)"
 side="BOTH"
 
 [[dependencies.journeymap_webmap]]
 modId = "minecraft"
 type = "required"
-versionRange = "[26.2,)"
+versionRange = "[26.3,)"
 side="BOTH"
 
 [[dependencies.journeymap_webmap]]
 modId="journeymap"
 type = "required"
-versionRange="[26.2-6.0.0,)"
+versionRange="[26.3-6.0.0,)"
 side="BOTH"
