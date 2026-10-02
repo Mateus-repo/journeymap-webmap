@@ -117,3 +117,13 @@ run/
 # Avoid ignoring Gradle wrapper jar file (.jar files are usually ignored)
 !gradle-wrapper.jar
 /.gradle-home/
+
+# --- journeymap-webmap fork: build + generated artefacts ---
+# upstream mod jar and the frontend extracted out of it, used as the patch source
+/_official/
+# output of patch-webmap.ps1
+/webmap-assets/
+# output of inject-frontend.ps1
+/dist/
+# sources recovered from the bundle source map, for reference only
+/webmap-frontend/
