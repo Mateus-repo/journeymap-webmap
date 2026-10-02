@@ -22,6 +22,7 @@ import java.io.IOException;
 import java.io.OutputStream;
 import java.nio.channels.Channels;
 import java.nio.file.Files;
+import java.util.Locale;
 
 public class Tiles
 {
@@ -123,6 +124,20 @@ public class Tiles
         ChunkPos endCoord = new ChunkPos(maxChunkX, maxChunkY);
 
         boolean showGrid = JourneymapClient.getInstance().getFullMapProperties().showGrid.get();
+
+        // Let the web client override the chunk grid per request instead of having to change the
+        // in-game JourneyMap setting: /tiles/tile.png?...&grid=0 hides it, &grid=1 forces it on.
+        String gridParam = ctx.queryParam("grid");
+        if (gridParam != null)
+        {
+            showGrid = switch (gridParam.trim().toLowerCase(Locale.ROOT))
+            {
+                case "0", "false", "no", "off" -> false;
+                case "1", "true", "yes", "on" -> true;
+                default -> showGrid;
+            };
+        }
+
         MapType mapType = new MapType(mapTypeName, y, DimensionHelper.getWorldKeyForName(dimension));
 
         NativeImage img = RegionImageHandler.getMergedChunks(
