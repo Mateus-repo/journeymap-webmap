@@ -71,7 +71,7 @@ Write-Host 'Patching index.html...'
 $gridSwitch = @'
             <div class="settings-group">
                 <div class="field">
-                    <b-switch v-model="visibleGrid" @change="setGridVisible($event)">
+                    <b-switch v-model="visibleGrid">
                         Chunk grid
                     </b-switch>
                 </div>
@@ -158,6 +158,15 @@ $extra = @'
         if (typeof app.setGridVisible === "function") {
             app.setGridVisible(!! app.visibleGrid);
         }
+
+        // Watcher, not @change on the switch: Buefy's Switch component only emits
+        // "input" (that is what v-model listens to) and never re-emits the native
+        // change event, so an @change listener would silently never fire.
+        app.$watch("visibleGrid", function (value) {
+            if (typeof app.setGridVisible === "function") {
+                app.setGridVisible(!! value);
+            }
+        });
 
         // the getter must actually touch the reactive props for $watch to subscribe
         app.$watch(
