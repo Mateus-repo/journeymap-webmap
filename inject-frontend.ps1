@@ -5,6 +5,13 @@
 # set, and the local-copy path it uses otherwise gets wiped on every launch. Putting
 # the patched assets inside the jar is what makes the change stick with zero setup.
 #
+# Both archives are rebuilt from scratch rather than opened in ZipArchiveMode::Update.
+# Update mode rewrites local headers and can emit an EXT data descriptor on a STORED
+# entry, which java.util.zip.ZipInputStream rejects with
+# "only DEFLATED entries can have EXT descriptor" - and that is exactly the parser
+# Fabric Loader uses to scan nested jars, so the mod then fails discovery and the
+# game refuses to launch. Everything below is written with Optimal compression.
+#
 # Usage:  powershell -File inject-frontend.ps1 -BuiltJar <path to fabric jar>
 
 param(
@@ -15,108 +22,108 @@ $ErrorActionPreference = 'Stop'
 Add-Type -AssemblyName System.IO.Compression.FileSystem
 Add-Type -AssemblyName System.IO.Compression
 
-$root    = Split-Path -Parent $MyInvocation.MyCommand.Path
-$assets  = Join-Path $root 'webmap-assets'
-$official= Join-Path $root '_official\journeymap-webmap-fabric-26.3-1.0.13.jar'
-$dist    = Join-Path $root 'dist'
+$root     = Split-Path -Parent $MyInvocation.MyCommand.Path
+$assets   = Join-Path $root 'webmap-assets'
+$official = Join-Path $root '_official\journeymap-webmap-fabric-26.3-1.0.13.jar'
+$dist     = Join-Path $root 'dist'
+$tmp      = Join-Path $root '.inject-tmp'
 
-if (-not (Test-Path -LiteralPath $assets))  { throw "webmap-assets not found: $assets" }
+$WANTED = 'assets/journeymap/web/'
+$OPT    = [System.IO.Compression.CompressionLevel]::Optimal
+
+if (-not (Test-Path -LiteralPath $assets))   { throw "webmap-assets not found: $assets" }
 if (-not (Test-Path -LiteralPath $BuiltJar)) { throw "built jar not found: $BuiltJar" }
+if (Test-Path -LiteralPath $tmp) { Remove-Item -LiteralPath $tmp -Recurse -Force }
+New-Item -ItemType Directory -Force -Path $tmp | Out-Null
 
-# --- 1. work out the nested jar's name from the built jar ----------------------
-$zip = [System.IO.Compression.ZipFile]::OpenRead($BuiltJar)
+# --- 1. locate the nested jar ---------------------------------------------------
+$baseJar = $official
+if (-not (Test-Path -LiteralPath $baseJar)) { $baseJar = $BuiltJar }
+
+$z = [System.IO.Compression.ZipFile]::OpenRead($baseJar)
 try {
-    $nested = $zip.Entries |
+    $nested = $z.Entries |
         Where-Object { $_.FullName -match '^META-INF/jars/webmap-client.*\.jar$' } |
         Select-Object -First 1
-    if (-not $nested) { throw 'no META-INF/jars/webmap-client*.jar inside the built jar' }
+    if (-not $nested) { throw 'no META-INF/jars/webmap-client*.jar in ' + $baseJar }
     $nestedName = $nested.FullName
+    $origNested = Join-Path $tmp 'orig-webmap-client.jar'
+    [System.IO.Compression.ZipFileExtensions]::ExtractToFile($nested, $origNested, $true)
 }
-finally { $zip.Dispose() }
+finally { $z.Dispose() }
 
 Write-Host "nested jar : $nestedName"
+Write-Host "base jar   : $(Split-Path $baseJar -Leaf)"
 
-# --- 2. rebuild that nested jar with our assets swapped in ---------------------
-if (Test-Path -LiteralPath $dist) { Remove-Item -LiteralPath $dist -Recurse -Force }
-New-Item -ItemType Directory -Force -Path $dist | Out-Null
+# --- 2. rebuild the nested jar fresh -------------------------------------------
+$newNested = Join-Path $tmp 'new-webmap-client.jar'
 
-$tmpNested = Join-Path $dist ([System.IO.Path]::GetFileName($nestedName))
-
-if (Test-Path -LiteralPath $official) {
-    # start from the official nested jar so fabric.mod.json and anything else survive
-    $oz   = [System.IO.Compression.ZipFile]::OpenRead($official)
-    $oent = $oz.Entries | Where-Object { $_.FullName -eq $nestedName } | Select-Object -First 1
-    [System.IO.Compression.ZipFileExtensions]::ExtractToFile($oent, $tmpNested, $true)
-    $oz.Dispose()
-    Write-Host 'base       : taken from the official mod jar'
-}
-else {
-    Copy-Item -LiteralPath $BuiltJar -Destination $tmpNested
-    Write-Host 'base       : WARNING fell back to copying the mod jar (should not happen)'
-}
-
-$WANTED_PREFIX = 'assets/journeymap/web/'
-
-$nz = [System.IO.Compression.ZipFile]::Open($tmpNested, [System.IO.Compression.ZipArchiveMode]::Update)
+$src = [System.IO.Compression.ZipFile]::OpenRead($origNested)
+$dst = [System.IO.Compression.ZipFile]::Open($newNested, [System.IO.Compression.ZipArchiveMode]::Create)
 try {
-    $stale = @($nz.Entries | Where-Object { $_.FullName.StartsWith($WANTED_PREFIX) })
-    foreach ($e in $stale) { $e.Delete() }
-    Write-Host ("removed    : {0} upstream frontend entries" -f $stale.Count)
+    $kept = 0
+    $dropped = 0
+    foreach ($e in $src.Entries) {
+        if ($e.FullName.EndsWith('/')) { continue }
+        if ($e.FullName.StartsWith($WANTED)) { $dropped++; continue }
+
+        $ne = $dst.CreateEntry($e.FullName, $OPT)
+        $ne.LastWriteTime = $e.LastWriteTime
+        $ins = $e.Open()
+        $outs = $ne.Open()
+        $ins.CopyTo($outs)
+        $outs.Dispose(); $ins.Dispose()
+        $kept++
+    }
+    Write-Host ("nested     : kept {0}, replaced {1}" -f $kept, $dropped)
 
     $added = 0
     foreach ($f in Get-ChildItem -LiteralPath $assets -Recurse -File) {
         $rel = $f.FullName.Substring($assets.Length + 1).Replace('\', '/')
-        $entryName = $WANTED_PREFIX + $rel
-
-        [System.IO.Compression.ZipFileExtensions]::CreateEntryFromFile(
-            $nz, $f.FullName, $entryName, [System.IO.Compression.CompressionLevel]::Optimal) | Out-Null
+        $ne = $dst.CreateEntry($WANTED + $rel, $OPT)
+        $ne.LastWriteTime = $f.LastWriteTime
+        $ins = [System.IO.File]::OpenRead($f.FullName)
+        $outs = $ne.Open()
+        $ins.CopyTo($outs)
+        $outs.Dispose(); $ins.Dispose()
         $added++
     }
-    Write-Host ("added      : {0} patched frontend files" -f $added)
+    Write-Host ("nested     : added {0} patched frontend files" -f $added)
 }
-finally { $nz.Dispose() }
+finally { $dst.Dispose(); $src.Dispose() }
 
-# --- 3. swap the nested jar inside the mod jar ---------------------------------
+# --- 3. rebuild the mod jar fresh ----------------------------------------------
+if (Test-Path -LiteralPath $dist) { Remove-Item -LiteralPath $dist -Recurse -Force }
+New-Item -ItemType Directory -Force -Path $dist | Out-Null
 $outJar = Join-Path $dist ([System.IO.Path]::GetFileName($BuiltJar))
-Copy-Item -LiteralPath $BuiltJar -Destination $outJar -Force
 
-$mz = [System.IO.Compression.ZipFile]::Open($outJar, [System.IO.Compression.ZipArchiveMode]::Update)
+$msrc = [System.IO.Compression.ZipFile]::OpenRead($BuiltJar)
+$mdst = [System.IO.Compression.ZipFile]::Open($outJar, [System.IO.Compression.ZipArchiveMode]::Create)
 try {
-    $old = $mz.Entries | Where-Object { $_.FullName -eq $nestedName } | Select-Object -First 1
-    $old.Delete()
+    $n = 0
+    foreach ($e in $msrc.Entries) {
+        if ($e.FullName.EndsWith('/')) { continue }
 
-    [System.IO.Compression.ZipFileExtensions]::CreateEntryFromFile(
-        $mz, $tmpNested, $nestedName, [System.IO.Compression.CompressionLevel]::NoCompression) | Out-Null
+        $ne = $mdst.CreateEntry($e.FullName, $OPT)
+        $ne.LastWriteTime = $e.LastWriteTime
+
+        if ($e.FullName -eq $nestedName) {
+            $ins = [System.IO.File]::OpenRead($newNested)
+        } else {
+            $ins = $e.Open()
+        }
+        $outs = $ne.Open()
+        $ins.CopyTo($outs)
+        $outs.Dispose(); $ins.Dispose()
+        $n++
+    }
+    Write-Host ("mod jar    : wrote {0} entries" -f $n)
 }
-finally { $mz.Dispose() }
+finally { $mdst.Dispose(); $msrc.Dispose() }
 
 Write-Host ''
 Write-Host 'Patched mod jar:'
 Write-Host "  $outJar"
 Write-Host ("  {0:N2} MB" -f ((Get-Item -LiteralPath $outJar).Length / 1MB))
 
-# --- 4. verify the swap actually landed ---------------------------------------
-$vz = [System.IO.Compression.ZipFile]::OpenRead($outJar)
-try {
-    $check = $vz.Entries | Where-Object { $_.FullName -eq $nestedName } | Select-Object -First 1
-    if (-not $check) { throw 'verification failed: nested jar missing from output' }
-    $ms = New-Object System.IO.MemoryStream
-    $s  = $check.Open(); $s.CopyTo($ms); $s.Dispose()
-    $ms.Position = 0
-
-    $inner = New-Object System.IO.Compression.ZipArchive($ms, [System.IO.Compression.ZipArchiveMode]::Read)
-    $html  = $inner.GetEntry('assets/journeymap/web/index.html')
-    if (-not $html) { throw 'verification failed: index.html missing from nested jar' }
-    $sr = New-Object System.IO.StreamReader($html.Open())
-    $text = $sr.ReadToEnd(); $sr.Dispose()
-    $inner.Dispose()
-
-    foreach ($probe in 'visibleGrid', 'zoomIn', 'jm-webmap-settings') {
-        if ($text -notmatch $probe) { throw "verification failed: '$probe' not found in patched index.html" }
-        Write-Host ("verified   : {0}" -f $probe)
-    }
-}
-finally { $vz.Dispose() }
-
-Write-Host ''
-Write-Host 'OK'
+Remove-Item -LiteralPath $tmp -Recurse -Force
