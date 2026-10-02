@@ -25,11 +25,17 @@ const PLAYER = {
 };
 const WORLD = { dimension: 'minecraft:overworld', name: 'MockWorld' };
 const WAYPOINTS = {
-    '1': {
-        x: 200, y: 70, z: -300, type: 'waypoint', name: 'Home Base',
-        enable: true, color: 0xff0000, show: true,
+    'jm,1': {
+        guid: 'jm,1',
+        name: 'Home Base',
+        type: 'Waypoint',
+        color: 0xff0000,
+        pos: { x: 200, y: 70, z: -300, primaryDimension: 'minecraft:overworld' },
+        icon: { id: 'journeymap-waypoint', color: null },
         settings: { enable: true },
         dimensions: ['minecraft:overworld'],
+        enable: true,
+        show: true,
     },
 };
 const PLAYERS = {

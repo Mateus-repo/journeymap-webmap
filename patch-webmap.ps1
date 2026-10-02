@@ -1,10 +1,15 @@
 # Builds an override copy of the JourneyMap webmap frontend with:
 #   1. a "Chunk grid" toggle wired to the new server-side ?grid=0/1 param
 #   2. settings persistence in localStorage (upstream loses them on every reload)
-#   3. zoom +/- buttons (upstream only has the scroll wheel, useless on a phone)
+#   3. an always-visible status bar (coords / biome / world / zoom)
+#   4. a "recentre on player" button
 #
 # The upstream frontend is a webpack bundle, but bundle.js ships with a source map,
 # so the readable originals live in webmap-frontend/ for reference.
+#
+# NOTE: do not add custom zoom buttons. Leaflet already renders its own zoom
+# control (.leaflet-control-zoom) unless zoomControl is disabled, so a second
+# pair just duplicates it in the corner.
 
 $ErrorActionPreference = 'Stop'
 
@@ -24,6 +29,7 @@ Get-ChildItem -LiteralPath $out -Recurse -Filter '*.map' -File -ErrorAction Sile
 
 $bundlePath = Join-Path $out 'bundled\bundle.js'
 $indexPath  = Join-Path $out 'index.html'
+$utf8NoBom  = New-Object System.Text.UTF8Encoding($false)
 
 $bundle = [System.IO.File]::ReadAllText($bundlePath)
 
@@ -34,17 +40,16 @@ function Replace-ExactlyOnce {
     if ($count -ne 1) {
         throw "[$Label] expected exactly 1 match for anchor, found $count"
     }
-    $new = $Text.Replace($Find, $Replace)
     Write-Host ("  ok  {0,-14} (1 occurrence replaced)" -f $Label)
-    return $new
+    return $Text.Replace($Find, $Replace)
 }
 
 Write-Host 'Patching bundle.js...'
 
-# 1. datastore default: grid OFF (the whole point of the toggle)
+# 1. datastore defaults: grid OFF, plus mapZoom for the status bar
 $bundle = Replace-ExactlyOnce $bundle `
     'visiblePolygons:!0,visibleWaypoints:!0,JMTileLayer:dm' `
-    'visiblePolygons:!0,visibleWaypoints:!0,visibleGrid:!1,JMTileLayer:dm' `
+    'visiblePolygons:!0,visibleWaypoints:!0,visibleGrid:!1,mapZoom:0,JMTileLayer:dm' `
     'datastore'
 
 # 2. append ?grid= to every tile request
@@ -60,14 +65,23 @@ $bundle = Replace-ExactlyOnce $bundle `
     'toggleFollowMode:function(){Zp.toggleFollowMode()},setGridVisible:function(t){window.datastore.state.visibleGrid=t,Zp.resetTiles()},' `
     'method'
 
-[System.IO.File]::WriteAllText($bundlePath, $bundle, (New-Object System.Text.UTF8Encoding($false)))
+[System.IO.File]::WriteAllText($bundlePath, $bundle, $utf8NoBom)
 
 # ---------------------------------------------------------------- index.html ----
 $index = [System.IO.File]::ReadAllText($indexPath)
 
+function Replace-Html {
+    param([string]$Text, [string]$Find, [string]$Replace, [string]$Label)
+
+    $count = ([regex]::Matches($Text, [regex]::Escape($Find))).Count
+    if ($count -ne 1) { throw "index.html: anchor for '$Label' found $count times, expected 1" }
+    Write-Host ("  ok  {0,-14} (1 occurrence replaced)" -f $Label)
+    return $Text.Replace($Find, $Replace)
+}
+
 Write-Host 'Patching index.html...'
 
-# Chunk grid switch, in its own group after Visibility
+# --- Chunk grid switch, in its own group after Visibility -----------------------
 $gridSwitch = @'
             <div class="settings-group">
                 <div class="field">
@@ -78,7 +92,7 @@ $gridSwitch = @'
             </div>
 '@
 
-$anchor = @'
+$visibilityAnchor = @'
             <div class="settings-group">
                 <div class="field">
                     <b-switch v-model="visiblePolygons">
@@ -93,39 +107,100 @@ $anchor = @'
             </div>
 '@
 
-if (([regex]::Matches($index, [regex]::Escape($anchor))).Count -ne 1) {
-    throw 'index.html: Visibility group anchor not found exactly once'
-}
-$index = $index.Replace($anchor, $anchor + "`r`n" + $gridSwitch)
+$index = Replace-Html $index $visibilityAnchor ($visibilityAnchor + "`r`n" + $gridSwitch) 'grid switch'
 
-# Zoom buttons, top-left above the follow button.
+# --- recentre button, added to the follow-mode control --------------------------
 # Inline SVG on purpose: only Settings/Box/Expand/Navigation/Earth/File/CircleX are
 # registered in index.js, and webpack tree-shook the other lucide icons out of the
-# bundle, so <lucide-icon-plus> would render as an unknown empty element.
+# bundle, so a <lucide-icon-*> tag would render as an unknown empty element.
 $svgAttrs = 'xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display:block"'
-$plusSvg  = "<svg $svgAttrs><path d=`"M5 12h14`"></path><path d=`"M12 5v14`"></path></svg>"
-$minusSvg = "<svg $svgAttrs><path d=`"M5 12h14`"></path></svg>"
+$targetSvg = "<svg $svgAttrs><circle cx=`"12`" cy=`"12`" r=`"7`"></circle><path d=`"M12 1v4`"></path><path d=`"M12 19v4`"></path><path d=`"M1 12h4`"></path><path d=`"M19 12h4`"></path></svg>"
 
-$zoomButtons = @"
-        <l-control :position="'topleft'"
-                   class="leaflet-bar leaflet-control">
-            <a @click="zoomBy(1)" id="zoomIn">$plusSvg</a>
-            <a @click="zoomBy(-1)" id="zoomOut">$minusSvg</a>
-        </l-control>
-"@
-
-$zoomAnchor = @'
+$recenterAnchor = @'
         <l-control :position="'topleft'"
                    class="leaflet-bar leaflet-control">
             <a @click="toggleFollowMode()" id="center">
+                <img :src="followIcon"/>
+            </a>
+        </l-control>
 '@
 
-if (([regex]::Matches($index, [regex]::Escape($zoomAnchor))).Count -ne 1) {
-    throw 'index.html: follow-mode anchor not found exactly once'
-}
-$index = $index.Replace($zoomAnchor, $zoomButtons + "`r`n" + $zoomAnchor)
+$recenterBlock = @"
+        <l-control :position="'topleft'"
+                   class="leaflet-bar leaflet-control">
+            <b-tooltip :animated="true" class="is-flex" label="Recentre on player" position="is-right">
+                <a @click="recenter()" id="recenter">$targetSvg</a>
+            </b-tooltip>
+            <a @click="toggleFollowMode()" id="center">
+                <img :src="followIcon"/>
+            </a>
+        </l-control>
+"@
 
-# persistence + zoom helper, injected after bundle.js
+$index = Replace-Html $index $recenterAnchor $recenterBlock 'recenter btn'
+
+# --- status bar ----------------------------------------------------------------
+$statusBar = @'
+    <div class="jm-hud">
+        <span class="jm-hud-item"><b>x</b><span v-text="playerX"></span></span>
+        <span class="jm-hud-item"><b>y</b><span v-text="playerY"></span></span>
+        <span class="jm-hud-item"><b>z</b><span v-text="playerZ"></span></span>
+        <span class="jm-hud-sep"></span>
+        <span class="jm-hud-item" v-text="playerBiome"></span>
+        <span class="jm-hud-item" v-text="playerWorld"></span>
+        <span class="jm-hud-sep"></span>
+        <span class="jm-hud-item">zoom <b v-text="mapZoom"></b></span>
+    </div>
+'@
+
+$mapEndAnchor = @'
+    </l-map>
+
+    <b-collapse :open.sync="settingsVisible"
+'@
+
+$index = Replace-Html $index $mapEndAnchor ("    </l-map>`r`n`r`n" + $statusBar + @'
+    <b-collapse :open.sync="settingsVisible"
+'@) 'status bar'
+
+# --- HUD styling, which has to live in <head> ---------------------------------
+# Vue 2's runtime compiler strips <style> tags found inside the template, so
+# putting this under #main silently loses every rule and the HUD renders as an
+# unstyled full-width strip.
+$styles = @'
+    <style>
+        .jm-hud {
+            position: fixed;
+            left: 50%;
+            bottom: 12px;
+            transform: translateX(-50%);
+            z-index: 1000;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 7px 14px;
+            background: rgba(18, 20, 26, 0.85);
+            color: #e6e6e6;
+            border-radius: 8px;
+            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.45);
+            font: 13px/1.1 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+            pointer-events: none;
+            white-space: nowrap;
+            user-select: none;
+        }
+        .jm-hud b { color: #7fd4ff; font-weight: 600; margin: 0 1px 0 3px; }
+        .jm-hud-item:first-child b { margin-left: 0; }
+        .jm-hud-sep { width: 1px; height: 15px; background: rgba(255, 255, 255, 0.22); }
+        #recenter { display: flex; }
+        @media (max-width: 700px) {
+            .jm-hud { font-size: 11px; gap: 7px; padding: 6px 10px; bottom: 8px; }
+        }
+    </style>
+'@
+
+$index = Replace-Html $index '</head>' ("`r`n" + $styles.Trim() + "`r`n</head>") 'hud css'
+
+# --- behaviour injected after bundle.js ----------------------------------------
 $extra = @'
 
 <script>
@@ -142,11 +217,29 @@ $extra = @'
 
         var app = window.app;
 
-        // zoom buttons need a method; instance props are reachable from templates
-        app.zoomBy = function (delta) {
-            var map = app.$refs.map && app.$refs.map.mapObject;
-            if (map) { map.setZoom(map.getZoom() + delta); }
+        // Leaflet's map object is created asynchronously, so retry until it is there
+        function whenMapReady(cb) {
+            var tries = 0;
+            (function attempt() {
+                var m = app.$refs.map && app.$refs.map.mapObject;
+                if (m) { cb(m); return; }
+                if (tries++ < 100) { setTimeout(attempt, 100); }
+            }());
+        }
+
+        // translateCoords(x, z) in the bundle is [z * -1, x]
+        app.recenter = function () {
+            whenMapReady(function (m) {
+                var x = Number(app.playerX), z = Number(app.playerZ);
+                if (isFinite(x) && isFinite(z)) { m.setView([z * -1, x]); }
+            });
         };
+
+        // keep the zoom readout in the status bar in sync
+        whenMapReady(function (m) {
+            app.mapZoom = m.getZoom();
+            m.on("zoomend", function () { app.mapZoom = m.getZoom(); });
+        });
 
         try {
             var saved = JSON.parse(localStorage.getItem(STORE) || "{}");
@@ -184,13 +277,10 @@ $extra = @'
 </script>
 '@
 
-$scriptAnchor = '<script src="bundled/bundle.js"></script>'
-if (([regex]::Matches($index, [regex]::Escape($scriptAnchor))).Count -ne 1) {
-    throw 'index.html: bundle script tag not found exactly once'
-}
-$index = $index.Replace($scriptAnchor, $scriptAnchor + $extra)
+$index = Replace-Html $index '<script src="bundled/bundle.js"></script>' `
+    ('<script src="bundled/bundle.js"></script>' + $extra) 'inline script'
 
-[System.IO.File]::WriteAllText($indexPath, $index, (New-Object System.Text.UTF8Encoding($false)))
+[System.IO.File]::WriteAllText($indexPath, $index, $utf8NoBom)
 
 Write-Host ''
 Write-Host 'Done. Override webroot:'
