@@ -46,10 +46,10 @@ function Replace-ExactlyOnce {
 
 Write-Host 'Patching bundle.js...'
 
-# 1. datastore defaults: grid OFF, plus mapZoom for the status bar
+# 1. datastore defaults: grid OFF, plus state for the status bar and the UI toggle
 $bundle = Replace-ExactlyOnce $bundle `
     'visiblePolygons:!0,visibleWaypoints:!0,JMTileLayer:dm' `
-    'visiblePolygons:!0,visibleWaypoints:!0,visibleGrid:!1,mapZoom:0,JMTileLayer:dm' `
+    'visiblePolygons:!0,visibleWaypoints:!0,visibleGrid:!1,mapZoom:0,currentMapType:"day",uiHidden:!1,JMTileLayer:dm' `
     'datastore'
 
 # 2. append ?grid= to every tile request
@@ -140,8 +140,18 @@ $recenterBlock = @"
 $index = Replace-Html $index $recenterAnchor $recenterBlock 'recenter btn'
 
 # --- status bar ----------------------------------------------------------------
-$statusBar = @'
+# The eye button lives inside the HUD on purpose: it is the one thing that stays
+# visible when the rest of the UI is hidden, so there is always a way back. On a
+# phone there is no keyboard for the h shortcut, so this has to stay clickable.
+$eyeOn  = "<svg viewBox=`"0 0 24 24`"><path d=`"M1 12s4-7 11-7 11 7 11 7-4 7-11 7-11-7-11-7z`"></path><circle cx=`"12`" cy=`"12`" r=`"3`"></circle></svg>"
+$eyeOff = "<svg viewBox=`"0 0 24 24`"><path d=`"M17.94 17.94A10.1 10.1 0 0 1 12 19c-7 0-11-7-11-7a18.5 18.5 0 0 1 5.06-5.94`"></path><path d=`"M1 1l22 22`"></path><path d=`"M9.9 4.24A9.1 9.1 0 0 1 12 4c7 0 11 7 11 7a18.5 18.5 0 0 1-2.16 3.19`"></path></svg>"
+
+$statusBar = @"
     <div class="jm-hud">
+        <button class="jm-hud-btn" @click="toggleUi()" :title="uiHidden ? 'Show controls' : 'Hide controls'">
+            <svg v-if="! uiHidden" viewBox="0 0 24 24">$eyeOn</svg>
+            <svg v-else viewBox="0 0 24 24">$eyeOff</svg>
+        </button>
         <span class="jm-hud-item"><b>x</b><span v-text="playerX"></span></span>
         <span class="jm-hud-item"><b>y</b><span v-text="playerY"></span></span>
         <span class="jm-hud-item"><b>z</b><span v-text="playerZ"></span></span>
@@ -151,7 +161,7 @@ $statusBar = @'
         <span class="jm-hud-sep"></span>
         <span class="jm-hud-item">zoom <b v-text="mapZoom"></b></span>
     </div>
-'@
+"@
 
 $mapEndAnchor = @'
     </l-map>
@@ -192,6 +202,50 @@ $styles = @'
         .jm-hud-item:first-child b { margin-left: 0; }
         .jm-hud-sep { width: 1px; height: 15px; background: rgba(255, 255, 255, 0.22); }
         #recenter { display: flex; }
+
+        .jm-hud-btn {
+            pointer-events: auto;
+            display: flex;
+            align-items: center;
+            padding: 2px;
+            margin: 0 2px 0 0;
+            background: none;
+            border: 0;
+            cursor: pointer;
+            color: #cfd6e4;
+        }
+        .jm-hud-btn:hover { color: #7fd4ff; }
+        .jm-hud-btn svg { width: 16px; height: 16px; fill: none; stroke: currentColor;
+            stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; display: block; }
+
+        /* hiding the chrome: the status bar stays, it holds the button that brings it back */
+        body.jm-ui-hidden .leaflet-control-container { display: none; }
+
+        /* mark which map type is active; upstream gives every button the same look */
+        #mapTypeDay, #mapTypeNight, #mapTypeTopo, #mapTypeUnderground { opacity: 0.4; }
+        #mapTypeDay.jm-active, #mapTypeNight.jm-active,
+        #mapTypeTopo.jm-active, #mapTypeUnderground.jm-active {
+            opacity: 1;
+            border-radius: 3px;
+            box-shadow: inset 0 0 0 2px #7fd4ff;
+        }
+
+        .jm-keys { font-size: 12px; line-height: 1.9; }
+        .jm-keys kbd {
+            display: inline-block;
+            min-width: 1.4em;
+            padding: 0 5px;
+            border: 1px solid #555f70;
+            border-bottom-width: 2px;
+            border-radius: 4px;
+            background: #2a3040;
+            color: #dfe6f2;
+            font: 11px/1.6 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+            text-align: center;
+        }
+        .jm-keys div { display: flex; justify-content: space-between; gap: 12px; }
+        .jm-keys span { color: #b6c0d0; }
+
         @media (max-width: 700px) {
             .jm-hud { font-size: 11px; gap: 7px; padding: 6px 10px; bottom: 8px; }
         }
@@ -199,6 +253,37 @@ $styles = @'
 '@
 
 $index = Replace-Html $index '</head>' ("`r`n" + $styles.Trim() + "`r`n</head>") 'hud css'
+
+# --- keyboard legend in the settings pane --------------------------------------
+$keysPanel = @'
+        <div class="settings-pane-header">
+            Keyboard
+        </div>
+        <div class="content">
+            <div class="jm-keys">
+                <div><span>Chunk grid</span><kbd>g</kbd></div>
+                <div><span>Follow player</span><kbd>f</kbd></div>
+                <div><span>Recentre</span><kbd>r</kbd></div>
+                <div><span>Hide controls</span><kbd>h</kbd></div>
+                <div><span>Reset zoom</span><kbd>0</kbd></div>
+                <div><span>Zoom in / out</span><kbd>+ / -</kbd></div>
+            </div>
+        </div>
+    </b-collapse>
+'@
+
+$keysAnchor = @'
+                <div class="field">
+                    <b-switch v-model="followMapType">
+                        Match Minimap Type
+                    </b-switch>
+                </div>
+            </div>
+        </div>
+    </b-collapse>
+'@
+
+$index = Replace-Html $index $keysAnchor ($keysAnchor.TrimEnd("`r`n") + "`r`n`r`n" + $keysPanel) 'keyboard legend'
 
 # --- behaviour injected after bundle.js ----------------------------------------
 $extra = @'
@@ -216,6 +301,12 @@ $extra = @'
         if (! window.app) { setTimeout(boot, 50); return; }
 
         var app = window.app;
+
+        function save() {
+            var out = {};
+            KEYS.forEach(function (k) { out[k] = app[k]; });
+            try { localStorage.setItem(STORE, JSON.stringify(out)); } catch (e) {}
+        }
 
         // Leaflet's map object is created asynchronously, so retry until it is there
         function whenMapReady(cb) {
@@ -241,6 +332,113 @@ $extra = @'
             m.on("zoomend", function () { app.mapZoom = m.getZoom(); });
         });
 
+        // ---- hide / show the controls ---------------------------------------
+        function applyUi() {
+            document.body.classList.toggle("jm-ui-hidden", !! app.uiHidden);
+        }
+        app.toggleUi = function () {
+            app.uiHidden = ! app.uiHidden;
+            applyUi();
+            save();
+        };
+        app.$watch("uiHidden", applyUi);
+        applyUi();
+
+        // ---- mark the active map type ---------------------------------------
+        var MODE_BY_ID = {
+            mapTypeDay: "day",
+            mapTypeNight: "night",
+            mapTypeTopo: "topo",
+            mapTypeUnderground: "underground",
+        };
+        function paintMapType() {
+            Object.keys(MODE_BY_ID).forEach(function (id) {
+                var el = document.getElementById(id);
+                if (el) { el.classList.toggle("jm-active", MODE_BY_ID[id] === app.currentMapType); }
+            });
+        }
+        Object.keys(MODE_BY_ID).forEach(function (id) {
+            var el = document.getElementById(id);
+            if (el) {
+                el.addEventListener("click", function () {
+                    app.currentMapType = MODE_BY_ID[id];
+                    paintMapType();
+                    save();
+                });
+            }
+        });
+        app.$watch("currentMapType", paintMapType);
+
+        // ---- persist the view, the map type and the ui state -----------------
+        // The saved view is only applied once status flips to "ready": journeymap.js
+        // calls setView() on the player only during that transition, so applying
+        // earlier would just be overwritten.
+        function saveView(m) {
+            var c = m.getCenter();
+            try {
+                localStorage.setItem("jm-webmap-view", JSON.stringify({
+                    lat: c.lat, lng: c.lng, zoom: m.getZoom(),
+                    mapType: app.currentMapType, uiHidden: !! app.uiHidden,
+                }));
+            } catch (e) { /* storage full or unavailable */ }
+        }
+
+        var savedView = null;
+        try { savedView = JSON.parse(localStorage.getItem("jm-webmap-view") || "null"); } catch (e) {}
+        if (savedView) {
+            if (typeof savedView.mapType === "string") { app.currentMapType = savedView.mapType; }
+            if (typeof savedView.uiHidden === "boolean") { app.uiHidden = savedView.uiHidden; }
+        }
+        paintMapType();
+
+        function restoreView(m) {
+            if (! savedView) return;
+            var z = (typeof savedView.zoom === "number") ? savedView.zoom : m.getZoom();
+            // One atomic, un-animated setView. Calling setZoom and setView separately
+            // lets Leaflet animate both, and moveend/zoomend then fire while the view is
+            // still in flight, so the wrong centre and zoom end up saved again.
+            if (typeof savedView.lat === "number" && typeof savedView.lng === "number") {
+                m.setView([savedView.lat, savedView.lng], z, { animate: false });
+            } else {
+                m.setZoom(z, { animate: false });
+            }
+        }
+
+        var viewRestored = false;
+        app.$watch("status", function (s) {
+            if (s !== "ready" || viewRestored) { return; }
+            viewRestored = true;
+            whenMapReady(function (m) {
+                restoreView(m);
+                m.on("moveend zoomend", function () { saveView(m); });
+                saveView(m);
+            });
+        });
+
+        // ---- keyboard shortcuts ---------------------------------------------
+        // + / - are left to Leaflet, which already binds them on the focused map.
+        // Arrows are left alone for the same reason.
+        document.addEventListener("keydown", function (ev) {
+            if (ev.ctrlKey || ev.altKey || ev.metaKey) { return; }
+            var tag = (ev.target && ev.target.tagName || "").toLowerCase();
+            if (tag === "input" || tag === "textarea" || ev.target.isContentEditable) { return; }
+            if (document.querySelector(".log-modal.is-active")) { return; }
+
+            var k = ev.key;
+            var hit = true;
+
+            switch (k) {
+                case "g": case "G": app.visibleGrid = ! app.visibleGrid; break;
+                case "f": case "F": app.toggleFollowMode(); break;
+                case "r": case "R": app.recenter(); break;
+                case "h": case "H": app.toggleUi(); break;
+                case "0": whenMapReady(function (m) { m.setZoom(0); }); break;
+                default: hit = false;
+            }
+
+            if (hit) { ev.preventDefault(); save(); }
+        });
+
         try {
             var saved = JSON.parse(localStorage.getItem(STORE) || "{}");
             KEYS.forEach(function (k) {
@@ -264,11 +462,7 @@ $extra = @'
         // the getter must actually touch the reactive props for $watch to subscribe
         app.$watch(
             function () { return KEYS.map(function (k) { return app[k]; }).join(","); },
-            function () {
-                var out = {};
-                KEYS.forEach(function (k) { out[k] = app[k]; });
-                try { localStorage.setItem(STORE, JSON.stringify(out)); } catch (e) {}
-            }
+            save
         );
     }
 

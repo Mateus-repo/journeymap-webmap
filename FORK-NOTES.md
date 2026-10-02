@@ -36,24 +36,65 @@ Aceita `0/1`, `true/false`, `yes/no`, `on/off`.
 
 ### 2. Toggle "Chunk grid" no HUD — `patch-webmap.ps1`
 
-Adiciona um switch ao painel de settings ( grupo novo depois de Visibility), default
-**desligado**. Liga-o ao `@change="setGridVisible($event)"`, que atualiza o estado e chama
-`JM.resetTiles()` — sem isto nada acontece, porque o `JM` cacheia as URLs dos tiles por
-slug e devolveria sempre a URL antiga.
+Switch no painel de settings (grupo novo depois de Visibility), default **desligado**.
+Liga-o a um `app.$watch("visibleGrid", ...)`, **não** a um `@change` no switch: o
+componente `Switch` da Buefy só emite `input` (é o que o `v-model` escuta) e nunca
+re-emite o `change` nativo, portanto um listener `@change` nunca dispara.
 
-### 3. Persistência das definições — `patch-webmap.ps1`
+O watcher chama `JM.resetTiles()` — sem isto nada acontece, porque o `JM` cacheia as URLs
+dos tiles por slug e devolveria sempre a URL antiga.
 
-O upstream **perde tudo** a cada reload da página: visibility, follow mode, modo de mapa.
-Agora vai para `localStorage` sob a chave `jm-webmap-settings`.
+### 3. Persistência — `patch-webmap.ps1`
 
-### 4. Botões de zoom — `patch-webmap.ps1`
+O upstream **perde tudo** a cada reload. Agora:
 
-O upstream só tinha a roda do rato. Num telemóvel ou num ecrã secundário isso é inútil.
-Agora há `+`/`−` no canto superior esquerdo.
+- `jm-webmap-settings` — visibility, chunk grid, follow mode
+- `jm-webmap-view` — centro do mapa, zoom, tipo de mapa, estado da UI
 
-Usam **SVG inline** de propósito: em `index.js` só estão registados
+A vista só é restaurada quando `status` passa a `ready`, porque o `journeymap.js` chama
+`setView()` no jogador apenas durante essa transição. O `setView` é atómico e sem
+animação: separado, o Leaflet anima os dois e o `moveend` dispara com a vista a meio,
+guardando centro e zoom errados.
+
+### 4. Barra de estado permanente — `patch-webmap.ps1`
+
+`x` `y` `z` · bioma · mundo · zoom, em baixo ao centro. O upstream só expõe isto em três
+tooltips que existem apenas no hover — inúteis num telemóvel ou num ecrã secundário.
+
+O `<style>` tem de estar no `<head>`: o compiler de runtime do Vue 2 remove tags `<style>`
+que estejam dentro do template, e com ele lá dentro perdia-se todas as regras em silêncio.
+
+### 5. Botão recentrar — `patch-webmap.ps1`
+
+Ao lado do follow mode, usa o `translateCoords` do próprio bundle (`[z * -1, x]`).
+
+### 6. Atalhos de teclado — `patch-webmap.ps1`
+
+`g` chunk grid · `f` follow · `r` recentrar · `h` esconder controlos · `0` reset de zoom.
+`+`/`-` e as setas ficam com o Leaflet, que já os liga no mapa com foco. Legenda no painel
+de settings.
+
+### 7. Esconder a UI — `patch-webmap.ps1`
+
+`h` ou o botão de olho na barra. Esconde `.leaflet-control-container` mas **não** a barra,
+porque o botão do olho vive lá e é a única forma de voltar — num telemóvel não há teclado.
+
+### 8. Tipo de mapa activo — `patch-webmap.ps1`
+
+O upstream dá o mesmo aspecto aos quatro botões de modo. O activo fica com contorno azul
+e os inactivos esbatidos.
+
+### Nota sobre ícones
+
+Usam **SVG inline**, não `<lucide-icon-*>`: em `index.js` só estão registados
 `Settings/Box/Expand/Navigation/Earth/File/CircleX`, e o webpack fez tree-shake dos outros
-ícones lucide para fora do bundle — `<lucide-icon-plus>` renderizava vazio.
+ícones lucide para fora do bundle — um tag novo renderizava vazio.
+
+### Zoom: não duplicar
+
+O Leaflet já desenha o seu próprio controlo de zoom (`.leaflet-control-zoom`) porque o
+`zoomControl` não está desligado nas opções do `l-map`. Um segundo par de botões é apenas
+duplicação. Foi exactamente o que a primeira versão deste fork fez.
 
 ## Como compilar
 
