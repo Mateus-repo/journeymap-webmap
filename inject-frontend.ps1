@@ -62,9 +62,21 @@ $src = [System.IO.Compression.ZipFile]::OpenRead($origNested)
 $dst = [System.IO.Compression.ZipFile]::Open($newNested, [System.IO.Compression.ZipArchiveMode]::Create)
 try {
     $kept = 0
+    $keptDirs = 0
     $dropped = 0
+
+    # Directory entries must be preserved. Javalin's CLASSPATH static-file lookup
+    # resolves the web root as a classpath *directory*, which only works if the
+    # archive actually contains directory entries such as assets/journeymap/web/.
+    # Dropping them makes the server abort with "Static resource directory ... does
+    # not exist" and every request 404s, even though every file is present.
     foreach ($e in $src.Entries) {
-        if ($e.FullName.EndsWith('/')) { continue }
+        if ($e.FullName.EndsWith('/')) {
+            $dst.CreateEntry($e.FullName, $OPT) | Out-Null
+            $keptDirs++
+            continue
+        }
+
         if ($e.FullName.StartsWith($WANTED)) { $dropped++; continue }
 
         $ne = $dst.CreateEntry($e.FullName, $OPT)
@@ -75,7 +87,7 @@ try {
         $outs.Dispose(); $ins.Dispose()
         $kept++
     }
-    Write-Host ("nested     : kept {0}, replaced {1}" -f $kept, $dropped)
+    Write-Host ("nested     : kept {0} files + {1} dir entries, replaced {2}" -f $kept, $keptDirs, $dropped)
 
     $added = 0
     foreach ($f in Get-ChildItem -LiteralPath $assets -Recurse -File) {
@@ -102,7 +114,11 @@ $mdst = [System.IO.Compression.ZipFile]::Open($outJar, [System.IO.Compression.Zi
 try {
     $n = 0
     foreach ($e in $msrc.Entries) {
-        if ($e.FullName.EndsWith('/')) { continue }
+        if ($e.FullName.EndsWith('/')) {
+            $mdst.CreateEntry($e.FullName, $OPT) | Out-Null
+            $n++
+            continue
+        }
 
         $ne = $mdst.CreateEntry($e.FullName, $OPT)
         $ne.LastWriteTime = $e.LastWriteTime

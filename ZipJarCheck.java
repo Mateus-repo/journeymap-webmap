@@ -55,15 +55,20 @@ public class ZipJarCheck {
         // pass 2 - the nested jar, this is where Fabric blew up
         int nestedEntries = 0;
         int totalBytes = 0;
+        boolean hasWebRootDir = false;
         try (ZipInputStream zin = new ZipInputStream(new ByteArrayInputStream(nestedBytes))) {
             ZipEntry e;
             while ((e = zin.getNextEntry()) != null) {
                 nestedEntries++;
+                // Javalin resolves the web root as a classpath *directory*, so the
+                // archive has to actually carry the directory entry, not just files.
+                if (e.getName().equals("assets/journeymap/web/")) hasWebRootDir = true;
                 totalBytes += readFully(zin).length;
             }
         }
         System.out.println("  nested entries scanned : " + nestedEntries);
         System.out.println("  nested bytes inflated  : " + totalBytes);
+        System.out.println("  web root dir entry     : " + hasWebRootDir);
 
         // the frontend we injected must be in there
         boolean hasIndex = false, hasBundle = false;
@@ -77,8 +82,9 @@ public class ZipJarCheck {
         System.out.println("  has index.html         : " + hasIndex);
         System.out.println("  has bundle.js          : " + hasBundle);
 
-        if (!hasIndex || !hasBundle) {
-            System.out.println("FAIL: patched frontend missing");
+        if (!hasIndex || !hasBundle || !hasWebRootDir) {
+            System.out.println("FAIL: nested frontend incomplete (index=" + hasIndex
+                    + " bundle=" + hasBundle + " webrootdir=" + hasWebRootDir + ")");
             System.exit(1);
         }
         System.out.println();
