@@ -60,7 +60,22 @@ public class WebMap
                         String assetsRootProperty = System.getProperty("journeymap.webmap.assets_root", null);
                         File testFile = new File("../src/main/resources" + FileHandler.ASSETS_WEBMAP);
 
-                        if (assetsRootProperty != null)
+                        // Fork addition: serve a custom frontend from <minecraft>/journeymap/webmap
+                        // when it is present. The upstream fallbacks do not work under Fabric jar-in-jar:
+                        // the copy step further down asks for the journeymap_webmap:web namespace while
+                        // the assets live under assets/journeymap/web, and the classpath fallback cannot
+                        // resolve a directory prefix that only exists inside a nested jar. Javalin then
+                        // aborts with "Static resource directory ... does not exist" and every request,
+                        // including /, comes back 404.
+                        File overrideDir = new File(FileHandler.getMinecraftDirectory(), "journeymap/webmap");
+                        boolean useOverride = new File(overrideDir, "index.html").isFile();
+
+                        if (useOverride)
+                        {
+                            logger.info("Serving web content from fork override: " + overrideDir.getPath());
+                            config.staticFiles.add(overrideDir.getPath(), Location.EXTERNAL);
+                        }
+                        else if (assetsRootProperty != null)
                         {
                             logger.info("Detected 'journeymap.webmap.assets_root' property, serving static files from: " + assetsRootProperty);
                             config.staticFiles.add(assetsRootProperty, Location.EXTERNAL);
